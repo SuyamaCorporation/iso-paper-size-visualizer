@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISO 用紙サイズ 比較ビジュアライザー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-1 text-orange-400">📄 ISO 用紙サイズ 比較ビジュアライザー</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">用紙を選択して縮尺比較・重ね合わせ表示</p>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <!-- Left: Paper selector -->
+    <div class="md:col-span-1">
+      <div class="bg-gray-800 rounded-lg p-3 mb-3">
+        <div class="text-sm text-gray-400 mb-2">用紙を選択（複数可）</div>
+        <div id="paperList" class="space-y-1 max-h-72 overflow-y-auto"></div>
+        <div class="border-t border-gray-700 mt-2 pt-2">
+          <div class="text-xs text-gray-500 mb-1">カスタムサイズ (mm)</div>
+          <div class="flex gap-1">
+            <label for="customW" class="sr-only">幅(mm)</label>
+            <input type="number" id="customW" placeholder="幅" min="1" max="5000"
+              class="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none"
+              aria-label="カスタム幅(mm)">
+            <span class="self-center text-gray-500 text-xs">×</span>
+            <label for="customH" class="sr-only">高さ(mm)</label>
+            <input type="number" id="customH" placeholder="高さ" min="1" max="5000"
+              class="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none"
+              aria-label="カスタム高さ(mm)">
+            <button id="addCustomBtn"
+              class="px-2 py-1 bg-orange-700 hover:bg-orange-600 rounded text-xs"
+              aria-label="カスタムサイズを追加">追加</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mode toggle -->
+      <div class="bg-gray-800 rounded-lg p-3 mb-3">
+        <div class="text-sm text-gray-400 mb-2">表示モード</div>
+        <div class="flex gap-2">
+          <button id="normalModeBtn"
+            class="flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400"
+            aria-label="通常比較モード">縮尺比較</button>
+          <button id="overlapModeBtn"
+            class="flex-1 py-1 bg-gray-700 rounded text-xs font-bold"
+            aria-label="重ね合わせモード">重ね合わせ</button>
+        </div>
+      </div>
+
+      <!-- Unit toggle -->
+      <div class="bg-gray-800 rounded-lg p-3">
+        <div class="text-sm text-gray-400 mb-2">単位</div>
+        <div class="flex gap-2">
+          <button id="mmBtn"
+            class="flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400"
+            aria-label="mm表示">mm</button>
+          <button id="inchBtn"
+            class="flex-1 py-1 bg-gray-700 rounded text-xs font-bold"
+            aria-label="inch表示">inch</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Canvas + info -->
+    <div class="md:col-span-2">
+      <div class="bg-gray-800 rounded-lg p-2 mb-3">
+        <canvas id="paperCanvas" width="540" height="400" class="w-full rounded bg-gray-950"></canvas>
+      </div>
+      <!-- Selected info -->
+      <div id="selectedInfo" class="grid grid-cols-2 gap-2"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Paper sizes in mm [w, h]
+const PAPERS = {
+  'A': {
+    'A0':[841,1189],'A1':[594,841],'A2':[420,594],'A3':[297,420],'A4':[210,297],
+    'A5':[148,210],'A6':[105,148],'A7':[74,105],'A8':[52,74],'A9':[37,52],'A10':[26,37]
+  },
+  'B': {
+    'B0':[1000,1414],'B1':[707,1000],'B2':[500,707],'B3':[353,500],'B4':[250,353],
+    'B5':[176,250],'B6':[125,176],'B7':[88,125],'B8':[62,88],'B9':[44,62],'B10':[31,44]
+  },
+  'C': {
+    'C0':[917,1297],'C1':[648,917],'C2':[458,648],'C3':[324,458],'C4':[229,324],
+    'C5':[162,229],'C6':[114,162],'C7':[81,114],'C8':[57,81]
+  },
+  'US': {
+    'Letter':[216,279],'Legal':[216,356],'Ledger':[432,279],'Executive':[184,267],
+    'Tabloid':[279,432]
+  }
+};
+
+const COLORS = {
+  'A': '#fb923c', 'B': '#60a5fa', 'C': '#34d399', 'US': '#f472b6'
+};
+const ALPHA_FILL = 0.12;
+
+let selectedPapers = new Set(['A4']);
+let unit = 'mm';
+let mode = 'normal'; // 'normal' or 'overlap'
+let customPapers = [];
+
+const canvas = document.getElementById('paperCanvas');
+const ctx = canvas.getContext('2d');
+
+function mmToIn(v) { return (v / 25.4).toFixed(2); }
+function fmt(v) { return unit === 'mm' ? v + ' mm' : mmToIn(v) + '"'; }
+
+function getAllPapers() {
+  const all = {};
+  Object.entries(PAPERS).forEach(([group, papers]) => {
+    Object.entries(papers).forEach(([name, dims]) => {
+      all[name] = { dims, group };
+    });
+  });
+  customPapers.forEach(cp => { all[cp.name] = { dims: cp.dims, group: 'Custom' }; });
+  return all;
+}
+
+function getPaperColor(group) {
+  return COLORS[group] || '#a78bfa';
+}
+
+function drawNormal() {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#030712'; ctx.fillRect(0,0,W,H);
+  if (!selectedPapers.size) return;
+
+  const all = getAllPapers();
+  const sel = [...selectedPapers].filter(n => all[n]);
+  if (!sel.length) return;
+
+  // Find max dimension
+  const maxW = Math.max(...sel.map(n => all[n].dims[0]));
+  const maxH = Math.max(...sel.map(n => all[n].dims[1]));
+  const pad = 30;
+  const scaleX = (W - pad*2) / maxW;
+  const scaleY = (H - pad*2) / maxH;
+  const scale = Math.min(scaleX, scaleY);
+
+  sel.forEach((name, idx) => {
+    const { dims, group } = all[name];
+    const pw = dims[0] * scale;
+    const ph = dims[1] * scale;
+    // Anchor to bottom-left (like real paper comparison)
+    const x = pad;
+    const y = H - pad - ph;
+    const color = getPaperColor(group);
+    ctx.fillStyle = color.replace(')', `,${ALPHA_FILL})`).replace('rgb','rgba').replace('#','');
+    // Use hex + alpha
+    ctx.globalAlpha = ALPHA_FILL;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, pw, ph);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x, y, pw, ph);
+    // Label
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.min(14, pw / name.length * 1.5)}px sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(name, x + 3, y + 3);
+  });
+}
+
+function drawOverlap() {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#030712'; ctx.fillRect(0,0,W,H);
+  if (!selectedPapers.size) return;
+
+  const all = getAllPapers();
+  const sel = [...selectedPapers].filter(n => all[n]);
+  if (!sel.length) return;
+
+  const maxW = Math.max(...sel.map(n => all[n].dims[0]));
+  const maxH = Math.max(...sel.map(n => all[n].dims[1]));
+  const pad = 30;
+  const scaleX = (W - pad*2) / maxW;
+  const scaleY = (H - pad*2) / maxH;
+  const scale = Math.min(scaleX, scaleY);
+  const cx = W/2, cy = H/2;
+
+  // Draw from largest to smallest
+  const sorted = [...sel].sort((a,b) => all[b].dims[0]*all[b].dims[1] - all[a].dims[0]*all[a].dims[1]);
+
+  sorted.forEach((name, idx) => {
+    const { dims, group } = all[name];
+    const pw = dims[0] * scale;
+    const ph = dims[1] * scale;
+    const x = cx - pw/2;
+    const y = cy - ph/2;
+    const color = getPaperColor(group);
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, pw, ph);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x, y, pw, ph);
+    // Label at corner
+    ctx.fillStyle = color;
+    ctx.font = `bold 12px sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(name, x + 3, y + 3);
+  });
+}
+
+function redraw() {
+  if (mode === 'normal') drawNormal();
+  else drawOverlap();
+  renderSelectedInfo();
+}
+
+function renderSelectedInfo() {
+  const el = document.getElementById('selectedInfo');
+  el.innerHTML = '';
+  const all = getAllPapers();
+  [...selectedPapers].filter(n => all[n]).forEach(name => {
+    const { dims, group } = all[name];
+    const color = getPaperColor(group);
+    const card = document.createElement('div');
+    card.className = 'bg-gray-800 rounded p-2 text-xs border-l-2';
+    card.style.borderColor = color;
+    const title = document.createElement('div');
+    title.className = 'font-bold mb-1';
+    title.style.color = color;
+    title.textContent = name;
+    const dims_el = document.createElement('div');
+    dims_el.className = 'text-gray-300';
+    dims_el.textContent = `${fmt(dims[0])} × ${fmt(dims[1])}`;
+    const area = document.createElement('div');
+    area.className = 'text-gray-500';
+    const areaMM = (dims[0] * dims[1]) / 1000000;
+    area.textContent = unit === 'mm' ? `面積: ${(dims[0]*dims[1]).toLocaleString()} mm²` : `面積: ${(dims[0]/25.4*dims[1]/25.4).toFixed(2)} in²`;
+    card.appendChild(title); card.appendChild(dims_el); card.appendChild(area);
+    el.appendChild(card);
+  });
+}
+
+function renderPaperList() {
+  const el = document.getElementById('paperList');
+  el.innerHTML = '';
+  const all = getAllPapers();
+  const groups = ['A', 'B', 'C', 'US', 'Custom'];
+  groups.forEach(group => {
+    const items = Object.entries(all).filter(([, v]) => v.group === group);
+    if (!items.length) return;
+    const header = document.createElement('div');
+    header.className = 'text-xs font-bold text-gray-500 mt-1 mb-0.5';
+    header.textContent = group;
+    el.appendChild(header);
+    items.forEach(([name, { dims }]) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2 cursor-pointer rounded px-1 py-0.5 hover:bg-gray-700 transition-colors';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.id = `paper-${name}`;
+      cb.className = 'accent-orange-400';
+      cb.checked = selectedPapers.has(name);
+      cb.setAttribute('aria-label', `${name}を選択`);
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedPapers.add(name);
+        else selectedPapers.delete(name);
+        redraw();
+      });
+      const label = document.createElement('label');
+      label.setAttribute('for', `paper-${name}`);
+      label.className = 'flex-1 cursor-pointer text-xs';
+      label.textContent = name;
+      const dim = document.createElement('span');
+      dim.className = 'text-gray-500 text-xs';
+      dim.textContent = `${dims[0]}×${dims[1]}`;
+      row.appendChild(cb); row.appendChild(label); row.appendChild(dim);
+      el.appendChild(row);
+    });
+  });
+}
+
+// Mode buttons
+document.getElementById('normalModeBtn').addEventListener('click', () => {
+  mode = 'normal';
+  document.getElementById('normalModeBtn').className = 'flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400';
+  document.getElementById('overlapModeBtn').className = 'flex-1 py-1 bg-gray-700 rounded text-xs font-bold';
+  redraw();
+});
+document.getElementById('overlapModeBtn').addEventListener('click', () => {
+  mode = 'overlap';
+  document.getElementById('overlapModeBtn').className = 'flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400';
+  document.getElementById('normalModeBtn').className = 'flex-1 py-1 bg-gray-700 rounded text-xs font-bold';
+  redraw();
+});
+
+// Unit buttons
+document.getElementById('mmBtn').addEventListener('click', () => {
+  unit = 'mm';
+  document.getElementById('mmBtn').className = 'flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400';
+  document.getElementById('inchBtn').className = 'flex-1 py-1 bg-gray-700 rounded text-xs font-bold';
+  renderSelectedInfo();
+});
+document.getElementById('inchBtn').addEventListener('click', () => {
+  unit = 'inch';
+  document.getElementById('inchBtn').className = 'flex-1 py-1 bg-orange-700 rounded text-xs font-bold border-2 border-orange-400';
+  document.getElementById('mmBtn').className = 'flex-1 py-1 bg-gray-700 rounded text-xs font-bold';
+  renderSelectedInfo();
+});
+
+// Custom size
+document.getElementById('addCustomBtn').addEventListener('click', () => {
+  const w = parseInt(document.getElementById('customW').value);
+  const h = parseInt(document.getElementById('customH').value);
+  if (!w || !h || w < 1 || h < 1) return;
+  const name = `${w}×${h}`;
+  customPapers.push({ name, dims: [w, h] });
+  selectedPapers.add(name);
+  renderPaperList();
+  redraw();
+  document.getElementById('customW').value = '';
+  document.getElementById('customH').value = '';
+});
+
+renderPaperList();
+redraw();
+</script>
+</body>
+</html>
